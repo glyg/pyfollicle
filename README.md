@@ -11,7 +11,7 @@ The easiest way to install and use this work is through `conda`
 
 * Install tyssue (this also installs its dependencies):
 ```sh
-$ conda install tyssue
+$ conda install -c conda-forge tyssue
 ```
 * Download the present repository (through the clone or download button).
 
