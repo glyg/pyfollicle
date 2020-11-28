@@ -303,6 +303,8 @@ def reset_segments(monolayer):
     monolayer.face_df.loc[proj < 0, "segment"] = "apical"
     monolayer.face_df.loc[monolayer.face_df.opposite != -1, "segment"] = "lateral"
     monolayer.face_df["visible"] = monolayer.face_df["segment"] == "apical"
+    monolayer.edge_df["segment"] = monolayer.upcast_face("segment")
+
 
 
 default_division_spec = {
@@ -348,6 +350,7 @@ def division(mono, manager, **kwargs):
         mono.cell_df.loc[cell, "prefered_vol"] = mono.specs["cell"]["prefered_vol"]
         mono.cell_df.loc[cell, "prefered_area"] = mono.specs["cell"]["prefered_area"]
         logger.info(f"{manager.clock:.2f}: division of cell {cell}")
+        orientation = division_spec.get('orientation', 'apical')
         daughter = cell_division(mono, cell, "vertical")
         if division_spec["autonomous"]:
             manager.append(division, **division_spec)
@@ -369,7 +372,6 @@ def lumen_growth(mono, manager, **kwargs):
 
     growth_rate = kwargs.get("lumen_growth_rate", 0.014)
     dt = mono.settings["dt"]
-    manager.clock += dt
     mono.settings["lumen_prefered_vol"] *= 1 + growth_rate * dt
     manager.append(lumen_growth, **kwargs)
 
@@ -380,7 +382,7 @@ def check_opposite(mono, manager, **kwargs):
     manager.append(check_opposite, **kwargs)
 
 
-def get_solver(follicle, model, dt, base_dir, history_file, parameters):
+def get_solver(follicle, model, dt, base_dir, history_file, parameters, save_interval):
 
     eptm = follicle.copy()
     eptm.edge_df[["srce", "trgt"]] = eptm.edge_df[["srce", "trgt"]].astype(int)
@@ -399,7 +401,7 @@ def get_solver(follicle, model, dt, base_dir, history_file, parameters):
 
     history = HistoryHdf5(
         eptm,
-        save_every=0.05,
+        save_every=save_interval,
         dt=dt,
         hf5file=base_dir / history_file,
     )
