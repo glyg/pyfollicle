@@ -1,56 +1,51 @@
 """Utilities and definitions for the follicle ellongation model
 
 """
-from datetime import datetime
 import logging
 
-logger = logging.getLogger("tyssue")
-logger.setLevel("DEBUG")
-
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 
 import ipyvolume as ipv
 import ipywidgets as widgets
-from ipywidgets import FloatProgress
-from IPython.display import display, Image
+from IPython.display import display
 
 from tyssue import HistoryHdf5, EventManager, Monolayer
 
-from tyssue.draw import sheet_view, browse_history
+from tyssue.draw import sheet_view
 from tyssue.geometry.bulk_geometry import ClosedMonolayerGeometry as geom
 from tyssue.io import hdf5
+
 from tyssue.dynamics import model_factory, effectors
+from tyssue.dynamics import units
+from tyssue.dynamics.sheet_gradients import area_grad
+
 from tyssue.generation.shapes import spherical_monolayer
 
-from tyssue.behaviors import EventManager
-from tyssue.behaviors import increase, decrease, reconnect
+from tyssue.behaviors import increase, reconnect
 from tyssue.solvers.viscous import EulerSolver
-from tyssue.utils.decorators import face_lookup
-
-
-from tyssue.draw import highlight_faces, create_gif, highlight_cells
 from tyssue.solvers.quasistatic import QSSolver
-
-
-from tyssue import HistoryHdf5
-
-
-from pathlib import Path
 
 from tyssue.utils.decorators import cell_lookup
 from tyssue.topology.monolayer_topology import cell_division
 from tyssue.topology.bulk_topology import fix_pinch
 
 
-from tyssue.dynamics import units
-from tyssue.dynamics.sheet_gradients import area_grad
-
 from tyssue.utils import to_nd
+
+logger = logging.getLogger("tyssue")
+logger.setLevel("DEBUG")
 
 
 class WAMonolayerGeometry(geom):
+    """Monolayer geometry class that adds a 'weighted  area' term
+    to the faces of the epithelium.
+
+    At each update, the weight on the faces is normalized so that
+    the sum of face weights for a cell is equal to its number of faces.
+
+    """
+
     @classmethod
     def update_all(cls, eptm):
 
@@ -77,6 +72,14 @@ class WAMonolayerGeometry(geom):
 
 
 class WeightedCellAreaElasticity(effectors.AbstractEffector):
+    """Cell area elasticity with weighted areas
+
+    .. math::
+
+        E_{wa} = \sum_c \frac{K_A}{2} (A'_c - A_0)^{1/2}
+        A'_c = \sum_{\alpha \in c} w_\alpha A_\alpha
+
+    """
 
     dimensions = units.area_elasticity
     magnitude = "area_elasticity"
@@ -89,10 +92,7 @@ class WeightedCellAreaElasticity(effectors.AbstractEffector):
             "area_elasticity": 1.0,
             "prefered_area": 1.0,
         },
-        "face": {
-            "area": 1.0,
-            "weight": 1.0,
-        },
+        "face": {"area": 1.0, "weight": 1.0},
     }
     spatial_ref = "prefered_area", units.area
 
@@ -127,9 +127,9 @@ class WeightedCellAreaElasticity(effectors.AbstractEffector):
 
 
 def get_initial_follicle(specs, recreate=False, Nc=200):
-
+    """Retrieves or recreates a spherical epithelium"""
     if recreate:
-        ## Lloy_relax=True takes time but shoudl give more spherical epithelium
+        ## Lloy_relax=True takes time but should give more spherical epithelium
         follicle = spherical_monolayer(9.0, 12.0, Nc, apical="in", Lloyd_relax=True)
         geom.update_all(follicle)
         geom.scale(follicle, follicle.cell_df.vol.mean() ** (-1 / 3), list("xyz"))
@@ -254,27 +254,26 @@ class MonolayerView(widgets.HBox):
             apical = eptm.get_sub_sheet("apical")
             apical.reset_index()
             apical.reset_topo()
-            apical.face_df["visible"] = True  # apical.face_df["x"] > 0
-            apical.face_df.sort_values("z", inplace=True)
+            apical.face_df["visible"] = apical.face_df["y"] > 0
             _ = sheet_view(
                 apical,
                 mode="2D",
                 coords=["z", "x"],
                 ax=self.ax0,
-                edge={"visible": True},
-                face={"visible": True, "color": apical.face_df.z},
+                edge={"visible": False},
+                face={"visible": True, "color": apical.face_df.area},
             )
             basal = eptm.get_sub_sheet("basal")
             basal.reset_index()
             basal.reset_topo()
-            basal.face_df.sort_values("z", inplace=True)
+            basal.face_df["visible"] = basal.face_df["y"] > 0
             _ = sheet_view(
                 basal,
                 mode="2D",
                 coords=["z", "x"],
                 ax=self.ax1,
-                edge={"visible": True},
-                face={"visible": True, "color": basal.face_df.z},
+                edge={"visible": False},
+                face={"visible": True, "color": basal.face_df.area},
             )
             self.ax0.set_title("Apical mesh")
             self.ax1.set_title("Basal mesh")
@@ -304,7 +303,6 @@ def reset_segments(monolayer):
     monolayer.face_df.loc[monolayer.face_df.opposite != -1, "segment"] = "lateral"
     monolayer.face_df["visible"] = monolayer.face_df["segment"] == "apical"
     monolayer.edge_df["segment"] = monolayer.upcast_face("segment")
-
 
 
 default_division_spec = {
@@ -350,7 +348,7 @@ def division(mono, manager, **kwargs):
         mono.cell_df.loc[cell, "prefered_vol"] = mono.specs["cell"]["prefered_vol"]
         mono.cell_df.loc[cell, "prefered_area"] = mono.specs["cell"]["prefered_area"]
         logger.info(f"{manager.clock:.2f}: division of cell {cell}")
-        orientation = division_spec.get('orientation', 'apical')
+        orientation = division_spec.get("orientation", "apical")
         daughter = cell_division(mono, cell, "vertical")
         if division_spec["autonomous"]:
             manager.append(division, **division_spec)
@@ -400,10 +398,7 @@ def get_solver(follicle, model, dt, base_dir, history_file, parameters, save_int
     manager.append(check_opposite)
 
     history = HistoryHdf5(
-        eptm,
-        save_every=save_interval,
-        dt=dt,
-        hf5file=base_dir / history_file,
+        eptm, save_every=save_interval, dt=dt, hf5file=base_dir / history_file
     )
 
     solver = EulerSolver(
@@ -412,10 +407,7 @@ def get_solver(follicle, model, dt, base_dir, history_file, parameters, save_int
         model,
         manager=manager,
         history=history,
-        bounds=(
-            -eptm.edge_df.length.median(),
-            eptm.edge_df.length.median(),
-        ),
+        bounds=(-eptm.edge_df.length.median(), eptm.edge_df.length.median()),
     )
 
     manager.update()
