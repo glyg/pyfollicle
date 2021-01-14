@@ -363,7 +363,7 @@ def set_gradient(mono, manager, **kwargs):
 
     polar_cells = get_polar_cells(mono, kwargs.get("polar_cells_ids"))
     update_gradient(mono, polar_cells, kwargs.get("amp", 1.0), kwargs.get("span", 1.0))
-    manager.append(lumen_growth, **kwargs)
+    manager.append(set_gradient, **kwargs)
 
 
 def lumen_growth(mono, manager, **kwargs):
@@ -392,6 +392,8 @@ def get_solver(follicle, model, dt, base_dir, history_file, parameters, save_int
     manager.append(set_gradient, **parameters)
 
     for cell_id in eptm.cell_df["id"]:
+        if cell_id in polar_cells:
+            continue
         manager.append(division, cell_id=cell_id, **parameters)
 
     manager.append(lumen_growth, **parameters)
